@@ -45,7 +45,7 @@ def eval(model, dl):
         x, y = x.cuda(), y.cuda()
         pred = model(x)
 
-        n_ok += pred.argmax(1).eq(y).sum()
+        n_ok += pred.argmax(1).eq(y).sum().item()
         n_total += y.size(0)
 
         loss += F.cross_entropy(pred, y, reduction='none').sum()

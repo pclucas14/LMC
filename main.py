@@ -11,20 +11,21 @@ import copy
 import numpy
 import kornia
 import argparse
-from model import VGG
+from model import *
 from data import CachedCIFAR10
 from eval import eval
+from utils import get_stats
 
 # --- Args
 parser = argparse.ArgumentParser()
 
 """ optimization (fixed across all settings) """
-parser.add_argument('--init_path', type=str, default='/checkpoint/lucaspc/LMC/cifar/ckpt/epoch_0.pth')
+parser.add_argument('--init_path', type=str, default=None) #'/checkpoint/lucaspc/LMC/cifar/ckpt/epoch_0.pth')
 parser.add_argument('--batch_size', type=int, default=128)
 parser.add_argument('--save_prefix', type=str, default='')
 parser.add_argument('--save_every', type=int, default=1)
 parser.add_argument('--replay', type=int, default=0)
-parser.add_argument('--n_tasks', type=int, default=1)
+parser.add_argument('--n_tasks', type=int, default=10)
 parser.add_argument('--start_task', type=int, default=0)
 parser.add_argument('--end_task', type=int, default=-1)
 parser.add_argument('--epochs', type=int, default=100)
@@ -32,6 +33,8 @@ parser.add_argument('--task_order', type=int, nargs='+', default=None)
 parser.add_argument('--init_from_best', type=int, default=1)
 parser.add_argument('--delta', type=float, default=0.)
 parser.add_argument('--exp_name', type=str, default=None)
+parser.add_argument('--model', type=str, default='resnet')
+parser.add_argument('--keep_k_hardest', type=float, default=-1)
 
 args = parser.parse_args()
 if args.task_order is None:
@@ -40,9 +43,12 @@ if args.task_order is None:
 print(args)
 
 
-wandb.init(project='LMC', name=args.exp_name, config=args)
+wandb.init(project='alma_simple', name=args.exp_name, config=args)
 
-init_model = lambda : VGG(n_channels=32)
+if args.model == 'vgg':
+    init_model = lambda : VGG(n_channels=32)
+else:
+    init_model = lambda : resnet18(num_classes=10) #VGG(n_channels=32)
 
 train_dataset = CachedCIFAR10('../cl-pytorch/data', train=True)
 test_dataset  = CachedCIFAR10('../cl-pytorch/data', train=False)
@@ -59,9 +65,13 @@ model.cuda()
 # --- Load the appropriate checkpoint
 PATH = args.init_path
 print(f'starting from {PATH}')
-model.load_state_dict(torch.load(PATH))
-print(model[0][0].weight[0])
+try:
+    model.load_state_dict(torch.load(PATH))
+    print(model[0][0].weight[0])
+except:
+    print('ERROR LOADING WEIGHTS')
 
+print(model)
 opt = torch.optim.SGD(model.parameters(), lr=0.01, momentum=0.9, weight_decay=1e-4)
 
 
@@ -85,6 +95,7 @@ for chunk in chunks:
 
 # ---- LOOP over Mega-batches
 seen_tasks = []
+n_epochs = args.epochs
 
 for task in args.task_order:
 
@@ -111,9 +122,23 @@ for task in args.task_order:
     best_model  = model
     best_acc, _ = eval(best_model, val_loader)
 
-    for epoch in range(args.epochs):
+    for epoch in range(n_epochs):
 
         model.train()
+
+        if epoch == 0:
+            loss, acc = get_stats(task_train_ds, model)
+            acc  = acc.float().mean().item()
+            hist = np.histogram(loss.cpu().numpy())
+            print(hist)
+            hist = wandb.Histogram(np_histogram=hist)
+            wandb.log({'train/loss_hist': hist, 'train/init_acc': acc}, step=n_epochs * task + epoch)
+
+            if args.keep_k_hardest > 0 and task > 0:
+                # only keep the hardest samples
+                import pdb; pdb.set_trace()
+                xx = 1
+
         start = time.time()
         train_loss = 0
 
@@ -141,7 +166,7 @@ for task in args.task_order:
             'train/loss':train_loss / (it+1),
             'train/time': epoch_time,
             'valid/acc': acc,
-            'valid/loss': loss}, step=args.epochs * task + epoch
+            'valid/loss': loss}, step=n_epochs * task + epoch
         )
 
         print(f'epoch {epoch} acc : {acc:.4f}\t{epoch_time:.2f}')
@@ -162,7 +187,7 @@ for task in args.task_order:
 
     acc, loss = eval(model, test_loader)
     print(f'test acc {acc:.4f}')
-    wandb.log({'test/acc': acc, 'test/loss': loss}, step=args.epochs * task + epoch)
+    wandb.log({'test/acc': acc, 'test/loss': loss}, step=n_epochs * task + epoch)
 
 acc, loss = eval(model, test_loader)
 print(f'test acc {acc:.4f}')
