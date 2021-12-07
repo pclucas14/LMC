@@ -37,18 +37,19 @@ def model_interpolate(model_a, model_b, alpha):
 
 
 @torch.no_grad()
-def eval(model, dl):
+def eval(model, dl, predict, loss_fn):
     model.eval()
 
     n_ok, n_total, loss = 0, 0, 0
     for (x,y) in dl:
         x, y = x.cuda(), y.cuda()
-        pred = model(x)
+        out  = model(x)
+        pred = predict(out)
 
-        n_ok += pred.argmax(1).eq(y).sum().item()
+        n_ok += pred.eq(y).sum().item()
         n_total += y.size(0)
 
-        loss += F.cross_entropy(pred, y, reduction='none').sum()
+        loss += loss_fn(out, y).sum()
 
     return n_ok / n_total, loss / n_total
 
